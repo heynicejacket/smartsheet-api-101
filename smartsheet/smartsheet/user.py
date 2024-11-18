@@ -183,7 +183,7 @@ def get_user_id_by_user_name(user_name, verbose=False):
             }
         }
 
-    :param user_name:           str, required           user or group share ID to return name from
+    :param user_name:           str, required           user or group share name to return ID from
     :param verbose:             bool, optional          if True, print status to terminal
     :return:                    str or None             user or group share name
     """
