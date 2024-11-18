@@ -1,10 +1,10 @@
+from smartsheet.core.api import (
+    rate_limiter_passthru
+)
+
 from smartsheet.core.constants import (
     SS_BASE_URL,
     SS_SEARCH_URL
-)
-
-from smartsheet.core.sql import (
-    rate_limiter_passthru
 )
 
 

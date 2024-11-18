@@ -1,261 +1,166 @@
-import requests
-import time
-from random import random
+import pandas as pd
+import sqlalchemy
 
 from smartsheet.core.constants import (
-    ACCESS_TOKEN_SS,
-    API_HEADER_SS
-)
-
-from smartsheet.core.toolkit import (
-    ensure_list_of_dicts
+    DTYPE_MAPPING
 )
 
 
-def create_upload_header(mime_type, filepath, verbose=False):
+def create_engine(db, dialect, user, password, endpoint, mssql_driver=17, fast_executemany=False, verbose=False):
     """
-    Assembles and returns headers required for uploading a file to Smartsheet.
+    Creates a SQLAlchemy engine to connect to a specified database based on the provided dialect (Postgres, MySQL, or
+    MSSQL).
 
-    :param mime_type:           str, required           MIME type of file being uploaded (e.g., 'application/pdf')
-    :param filepath:            str, required           path to file being uploaded
+    This function supports connection to PostgreSQL, MySQL, and Microsoft SQL Server. For MSSQL, mssql_driver parameter
+    allows selecting ODBC driver version, and fast_executemany can be used for faster bulk inserts; for PostgreSQL and
+    MySQL, use chunksize in db_to_df().
+
+    For MySQL, the following library must be installed:
+
+        pip install pymsql
+
+    The function returns a SQLAlchemy engine object for database interactions.
+
+    :param db:                  str, required           database name
+    :param dialect:             str, required           'postgres', 'mysql', or 'mssql'; database type
+    :param user:                str, required           database username
+    :param password:            str, required           database password
+    :param endpoint:            str, required           server hostname or IP address where database is hosted
+    :param mssql_driver:        int, optional           driver version for connecting to Microsoft SQL Server
+    :param fast_executemany:    bool, optional          if True, enables fast bulk inserts for MSSQL
     :param verbose:             bool, optional          if True, print status to terminal
-    :return:                    dict                    headers for upload request
+    :return:                    object                  SQLAlchemy engine object for specified database
     """
 
-    headers = {
-        'Authorization': f'Bearer {ACCESS_TOKEN_SS}',
-        'Content-Type': f'{mime_type}',
-        'Content-Disposition': f'attachment; filename="{filepath.split("/")[-1]}"'
-    }
-    print(headers) if verbose else None
-
-    return headers
-
-
-def format_column_headers(df):
-    """
-    Replace all spaces in DataFrame column headers with underscores and convert them to lowercase. For example:
-
-        Created Date
-        Status
-        Project ID
-
-    ...is converted to:
-
-        created_date
-        status
-        project_id
-
-    :param df:                  df, required            DataFrame whose column headers to be modified
-    :return:                    df                      DataFrame with modified columns
-    """
-
-    df.columns = df.columns.str.replace(' ', '_').str.lower()
-    return df
-
-
-def rate_limiter_passthru(url, request='get', post_data=None, return_all=False, verbose=False, **kwargs):
-    """
-    Rate limiter function that calls appropriate Smartsheet helper function based on request type.
-
-    :param url:                 str, required           URL to send request to
-    :param request:             str, required           HTTP request method ('get', 'post', 'put', 'delete')
-    :param post_data:           dict, required          data to send with POST or PUT requests
-    :param return_all:          bool, optional          if True, only return data dict; else, entire JSON dict
-    :param verbose:             bool, optional          if True, print status to terminal
-    :param kwargs:                                      additional parameters to be passed to helper functions
-    :return:                    JSON                    API response from helper function, or None if failure
-    """
-
-    code = 429
-    attempts = 0
-    max_attempts = 5
-
-    r = request.lower()
-
-    if r not in ('get', 'delete', 'put', 'post'):
-        raise ValueError(f'{r} is not a valid HTTP request type.')
-
-    while code == 429 and attempts < max_attempts:
-        if r == 'delete':
-            response = ss_delete(url, verbose=verbose, **kwargs)
-        elif r == 'get':
-            response = ss_get(url, params=post_data, return_all=return_all, verbose=verbose)
-        elif r == 'put':
-            response = ss_put(url, payload=post_data, return_all=return_all, verbose=verbose, **kwargs)
-        elif r == 'post':
-            response = ss_post(url, payload=post_data, return_all=return_all, verbose=verbose, **kwargs)
-
-        if response is None:
-            print(f"Failed to get a valid response for {request} request") if verbose else None
-            return None
-
-        # ensure response has status code or use 200 as default
-        code = response.status_code if hasattr(response, 'status_code') else 200
-
-        if code == 429:
-            print(f'{request} status returns {code}\n===== hit rate limit! =====') if verbose else None
-        else:
-            print(f'{request} status returns {code}') if verbose else None
-
-        if code == 429:
-            time.sleep((2 ** attempts) + random())                                      # exponential backoff
-            attempts += 1
-        elif code != 200:
-            print(f'HTTP Error: {code} for URL: {url}') if verbose else None            # if not 200 or 429, return error
-            return None
-        else:
-            return response
-
-    if attempts == max_attempts:
-        print(f'Max retry attempts reached for URL: {url}') if verbose else None
+    if dialect == 'postgres':
+        engine = sqlalchemy.create_engine(
+            url=f'postgresql://{user}:{password}@{endpoint}/{db}',
+            echo=verbose
+        )
+    elif dialect == 'mysql':
+        engine = sqlalchemy.create_engine(
+            url=f'mysql+pymysql://{user}:{password}@{endpoint}/{db}',
+            echo=verbose
+        )
+    elif dialect == 'mssql':
+        engine = sqlalchemy.create_engine(
+            url=f'mssql://{user}:{password}@{endpoint}/{db}'
+            f'?driver=ODBC+Driver+{str(mssql_driver)}+for+SQL+Server',
+            fast_executemany=fast_executemany,
+            echo=verbose
+        )
+    else:
+        print(f'dialect {dialect} invalid type; cannot create connection engine')
         return None
 
-    return None
+    print('Success: create_engine() successful to database {}.'.format(db)) if verbose else None
+
+    return engine
 
 
-def ss_delete(url, return_all=False, verbose=False):
+def db_to_df(query, engine, verbose=False):
     """
-    Sends a DELETE request to specified Smartsheet URL.
+    Executes a SQL query and returns result as a pandas DataFrame.
 
-    :param url:                 str, required           URL to send request to
-    :param return_all:          bool, optional          if True, only return data dict; else, entire json dict
-    :param verbose:             bool, optional          if True, print status to terminal
-    :return:                    JSON                    API response in JSON format
-    """
-
-    try:
-        response = requests.delete(url, headers=API_HEADER_SS)
-        response.raise_for_status()
-        return response.json() if return_all else response.json()
-    except requests.exceptions.HTTPError as err:
-        print(f'HTTP Error: {err}') if verbose else None
-        return None
-
-
-def ss_get(url, params=None, return_all=False, verbose=False):
-    """
-    Sends a GET request to specified Smartsheet URL.
-
-    If returning multiple, [ { ... }, { ... }, { ... }, ... ]
-
-    If returning a single sheet, { ... } hence needing to _ensure_list_of_dicts()
-
-    :param url:                 str, required           URL to send request to
-    :param params:              dict, optional          additional query parameters to include in GET request
-    :param return_all:          bool, optional          if True, only return data dict; else, entire json dict
-    :param verbose:             bool, optional          if True, print status to terminal
-    :return:                    JSON                    API response in JSON format
+    :param query:               str, required       SQL query to execute and convert to pandas DataFrame
+    :param engine:              object, required    SQLAlchemy engine object used to connect to database
+    :param verbose:             bool, optional      if True, print status to terminal
+    :return:                    df                  DataFrame from SQL query
     """
 
     try:
-        response = requests.get(url, headers=API_HEADER_SS, params=params)
-        response.raise_for_status()
+        return pd.read_sql(query, engine)
 
-        if not return_all:
-            return ensure_list_of_dicts(list_of_dicts=response.json())                 # convert dict to list of dicts
-
-        return response
-
-    except requests.exceptions.HTTPError as err:
-        print(f'HTTP Error: {err}') if verbose else None
-        return None
+    except Exception as e:
+        print(f'Error executing query: {e}') if verbose else None
 
 
-def ss_post(url, payload, return_all=False, verbose=False, **kwargs):
+def df_to_db(engine, df, tbl, if_tbl_exists, retrieve_dtype_from_db=False, dtype_override=None, chunksize=10000, verbose=False):
     """
-    Sends a POST request to specified Smartsheet URL with provided payload.
+    Connects to database and attempts to push a pandas DataFrame to a specified SQL table. Optionally checks or
+    overrides column data types based on provided mappings or existing database table schema.
 
-    :param url:                 str, required           URL to send request to
-    :param payload:             dict, required          JSON payload to include in POST request
-    :param return_all:          bool, optional          if True, only return data dict; else, entire json dict
-    :param verbose:             bool, optional          if True, print status to terminal
-    :param kwargs:              dict, optional          additional keyword arguments to pass to POST call
-    :return:                    JSON                    API response in JSON format
+    If dtype_override provided, it will be used to cast DataFrame columns to specified SQL types before upload.
+    Example as follows:
+
+        {'col1': sqlalchemy.types.Integer(), 'col2': sqlalchemy.types.String()}
+
+    If retrieve_dtype_from_db is True, function will fetch column types of existing SQL table and match DataFrame's
+    dtypes to existing table schema.
+
+    The function will check whether DataFrame's column types match SQL table's column types. If a mismatch occurs and
+    can be cast, the function will attempt to convert columns. If conversion is not possible, it will fail.
+
+    :param engine:                  object, required    SQLAlchemy engine object used to connect to database
+    :param df:                      df, required        pandas DataFrame to upload to SQL
+    :param tbl:                     str, required       name of table to push data to
+    :param if_tbl_exists:           str, required       ‘fail’, ‘replace’, or ‘append’
+    :param retrieve_dtype_from_db:  bool, optional      if True, retrieves column data types from existing SQL table
+    :param dtype_override:          dict, optional      a dict to define column names and their SQL types
+    :param chunksize:               int, optional       rows to be inserted at a time during bulk insert operations
+    :param verbose:                 bool, optional      if True, print status to terminal
+    :return:                        None
     """
+
+    if df.empty:
+        print('DataFrame is empty. Skipping SQL upload.') if verbose else None
+        return
+
+    # if needed, get column types from database
+    db_col_types = get_sql_col_types(engine=engine, tbl=tbl) if retrieve_dtype_from_db else {}
+    print(db_col_types) if verbose else None
+
+    # if provided, apply dtype overrides
+    if dtype_override:
+        print(f'Using provided dtype_override: {dtype_override}') if verbose else None
+        df = df.astype(dtype_override)
+
+    # compare and cast DataFrame column types to match SQL table schema
+    for col in df.columns:
+        if col in db_col_types:
+            expected_dtype = DTYPE_MAPPING.get(db_col_types[col].lower())
+            if expected_dtype and str(df[col].dtype) != expected_dtype:
+                try:
+                    print(f'Casting column {col} from {df[col].dtype} to {expected_dtype}') if verbose else None
+                    df[col] = df[col].astype(expected_dtype)
+                except Exception as e:
+                    raise TypeError(f'Cannot cast column \'{col}\' to {expected_dtype}: {e}')
 
     try:
-        # response = requests.post(url=url, headers=API_HEADER_SS, data=json.dumps(payload))
-        response = requests.post(url=url, headers=API_HEADER_SS, json=payload, **kwargs)
-        response.raise_for_status()
-        return response.json() if return_all else response.json().get('data')
-    except requests.exceptions.HTTPError as err:
-        print(f'HTTP Error: {err}') if verbose else None
-        return None
+        df.to_sql(name=tbl, con=engine, index=False, if_exists=if_tbl_exists, dtype=dtype_override, chunksize=chunksize)
+        print(f'Successfully pushed data to {tbl}.') if verbose else None
+
+    except Exception as e:
+        print(f'Error during upload to SQL: {e}') if verbose else None
+        raise
 
 
-def ss_post_upload(url, mime_type, filepath, params=None, verbose=False):
+def get_sql_col_types(engine, tbl, verbose=False):
     """
-    Uploads a file to specified Smartsheet URL using a POST request.
+    Given a table, retrieve column types from the database.
 
-    :param url:                 str, required           URL to send upload request to
-    :param mime_type:           str, required           MIME type of file being uploaded (e.g., 'application/pdf')
-    :param filepath:            str, required           path to file to be uploaded
-    :param params:              dict, optional          additional query parameters to include in POST request
+    Returned dict appears as follows:
+
+        {
+            'task_id': 'int',
+            'task_name': 'nvarchar',
+            'task_created': 'datetime',
+            'task_completed': 'bit'
+        }
+
+    :param engine:              object, required        SQLAlchemy engine object used to connect to database
+    :param tbl:                 str, required           name of table to push data to
     :param verbose:             bool, optional          if True, print status to terminal
-    :return:                    JSON                    API response confirming upload or error details
+    :return:                    dict                    dict of column names and dtypes
     """
 
-    headers = create_upload_header(mime_type=mime_type, filepath=filepath, verbose=verbose)
+    existing_table_query = f'SELECT column_name, data_type FROM information_schema.columns WHERE table_name = \'{tbl}\''
+    print(existing_table_query) if verbose else None
 
-    try:
-        with open(filepath, 'rb') as file_data:
-            if params is not None:
-                response = requests.post(url=url, headers=headers, params=params, data=file_data)
-            else:
-                response = requests.post(url=url, headers=headers, files={'file': file_data})
-            response.raise_for_status()
-            return response.json()
+    with engine.connect() as conn:
+        existing_columns = pd.read_sql(existing_table_query, conn)
+        db_col_types = dict(zip(existing_columns['column_name'], existing_columns['data_type']))
 
-    except FileNotFoundError:
-        raise FileNotFoundError(f'File not found: {filepath}')
+    print(f'Retrieved column types from {tbl}: {db_col_types}') if verbose else None
 
-    except requests.exceptions.RequestException as err:
-        print(f'Error uploading {filepath}: {err}') if verbose else None
-
-
-def ss_put(url, payload, return_all=False, verbose=False, **kwargs):
-    """
-    Sends a PUT request to specified Smartsheet URL with given payload.
-
-    :param url:                 str, required           URL to send request to
-    :param payload:             dict, required          JSON payload to include in PUT request
-    :param return_all:          bool, optional          if True, return entire JSON response; else, return 'data' field
-    :param verbose:             bool, optional          if True, print status to terminal
-    :param kwargs:              dict, optional          additional keyword arguments to pass to PUT call
-    :return:                    JSON                    API response in JSON format
-    """
-
-    try:
-        # response = requests.put(url, headers=API_HEADER_SS, data=json.dumps(payload))
-        response = requests.put(url=url, headers=API_HEADER_SS, json=payload, **kwargs)
-        response.raise_for_status()
-        return response.json() if return_all else response.json().get('data')
-    except requests.exceptions.HTTPError as err:
-        print(f'HTTP Error: {err}') if verbose else None
-        return None
-
-
-def ss_put_upload(url, filepath, filename, verbose=False):
-    """
-    Uploads a file to specified Smartsheet URL using a PUT request.
-
-    :param url:                 str, required           URL to send request to
-    :param filepath:            str, required           path to file to be uploaded
-    :param filename:            str, required           name of file as it should appear in Smartsheet
-    :param verbose:             bool, optional          if True, print status to terminal
-    :return:                    JSON                    API response confirming upload or error details
-    """
-
-    try:
-        with open(filepath, 'rb') as file:
-            files = {'file': (filename, file, 'application/octet-stream')}
-            response = requests.put(url=url, headers=API_HEADER_SS, files=files)
-            response.raise_for_status()
-            return response.json()
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f'File not found: {filepath}')
-
-    except requests.exceptions.RequestException as err:
-        print(f'Error uploading {filename}: {err}') if verbose else None
+    return db_col_types

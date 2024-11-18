@@ -1,6 +1,11 @@
 import os
 import requests
 
+from smartsheet.core.api import (
+    rate_limiter_passthru,
+    ss_post_upload
+)
+
 from smartsheet.core.constants import (
     MIME_TYPES,
     SS_BASE_URL,
@@ -9,11 +14,6 @@ from smartsheet.core.constants import (
     SS_IMAGE_URL,
     SS_ROW_URL,
     SS_SHEET_URL
-)
-
-from smartsheet.core.sql import (
-    rate_limiter_passthru,
-    ss_post_upload
 )
 
 from smartsheet.smartsheet.sheet import (

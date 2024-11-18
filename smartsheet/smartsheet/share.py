@@ -1,15 +1,15 @@
 import requests
 
+from smartsheet.core.api import (
+    rate_limiter_passthru
+)
+
 from smartsheet.core.constants import (
     API_HEADER_SS,
     SS_BASE_URL,
     SS_SHEET_URL,
     SS_SHARES_URL,
     SS_WORKSPACE_URL
-)
-
-from smartsheet.core.sql import (
-    rate_limiter_passthru
 )
 
 
