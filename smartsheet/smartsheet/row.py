@@ -1,14 +1,14 @@
 import pandas as pd
 
+from smartsheet.core.api import (
+    rate_limiter_passthru
+)
+
 from smartsheet.core.constants import (
     SS_BASE_URL,
     SS_EMAIL_URL,
     SS_ROW_URL,
     SS_SHEET_URL
-)
-
-from smartsheet.core.sql import (
-    rate_limiter_passthru
 )
 
 from smartsheet.smartsheet.column import (

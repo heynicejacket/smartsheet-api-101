@@ -1,15 +1,15 @@
 from urllib.parse import urlencode
 
+from smartsheet.core.api import (
+    rate_limiter_passthru
+)
+
 from smartsheet.core.constants import (
     SS_BASE_URL,
     SS_FOLDER_URL,
     SS_RETURN_ALL_URL,
     SS_SHARES_URL,
     SS_WORKSPACE_URL
-)
-
-from smartsheet.core.sql import (
-    rate_limiter_passthru
 )
 
 from smartsheet.core.toolkit import (
