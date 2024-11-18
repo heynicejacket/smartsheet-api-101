@@ -200,6 +200,34 @@ def get_column_dict(sheet_id, verbose=False):
     return {col['title']: col['id'] for col in col_json[0]['columns']}
 
 
+def get_col_id_from_col_name(sheet_id, col_name, verbose=False):
+    """
+    Given a sheet ID and a column name, returns the column ID.
+
+    :param sheet_id:            str, required           sheet ID
+    :param col_name:            str, required           column name to return ID from
+    :param verbose:             bool, optional          if True, print status to terminal
+    :return:                    str or None             column ID
+    """
+
+    col_data = get_column_dict(sheet_id, verbose=verbose)
+    return col_data.get(col_name)
+
+
+def get_col_name_from_col_id(sheet_id, col_id, verbose=False):
+    """
+    Given a sheet ID and a column ID, returns the column name.
+
+    :param sheet_id:            str, required           Sheet ID
+    :param col_id:              str, required           Column name to find ID for
+    :param verbose:             bool, optional          If True, print status to terminal
+    :return:                    str or None             Column ID if found, otherwise None
+    """
+
+    col_data = get_column_dict(sheet_id, verbose=verbose)
+    return next((key for key, value in col_data.items() if value == col_id), None)
+
+
 def get_sheet_column_metadata(sheet_id, base_keys=None, additional_keys=None, format_for_comparison=False, verbose=False):
     """
     Retrieves metadata for columns of a Smartsheet sheet, including column names and types. Optionally formats metadata
